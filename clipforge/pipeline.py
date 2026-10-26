@@ -1,5 +1,7 @@
 from __future__ import annotations
+import inspect
 import json
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
@@ -32,7 +34,21 @@ def run_pipeline(
         jobs.start(job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         emit(f"[1/3] Transcribing {source.name} ...", stage="Transcribing", progress=5)
-        segments = transcriber.transcribe(source)
+        started = time.time()
+        last = {"pct": -1}
+
+        def on_transcribe_progress(fraction: float) -> None:
+            pct = int(fraction * 100)
+            if pct == last["pct"]:
+                return
+            last["pct"] = pct
+            note = f"   transcribing {pct}% ({int(time.time() - started)}s elapsed)" if pct % 10 == 0 else None
+            jobs.update(job_id, progress=5 + int(40 * fraction), message=note)
+
+        if "on_progress" in inspect.signature(transcriber.transcribe).parameters:
+            segments = transcriber.transcribe(source, on_progress=on_transcribe_progress)
+        else:
+            segments = transcriber.transcribe(source)
         (job_dir / "transcript.json").write_text(json.dumps(segments_to_dict(segments)), encoding="utf-8")
 
         emit("[2/3] Finding engaging moments ...", stage="Finding moments", progress=45)

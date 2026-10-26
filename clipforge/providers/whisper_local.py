@@ -17,11 +17,13 @@ class WhisperTranscriber:
             self._model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
         return self._model
 
-    def _run(self, media_path: Path) -> list[Segment]:
+    def _run(self, media_path: Path, on_progress=None) -> list[Segment]:
         model = self._load()
-        raw_segments, _info = model.transcribe(
-            str(media_path), word_timestamps=True, vad_filter=True
+        raw_segments, info = model.transcribe(
+            str(media_path), word_timestamps=True, vad_filter=True,
+            beam_size=1, condition_on_previous_text=False,  # faster, tiny accuracy cost
         )
+        total = max(float(getattr(info, "duration", 0) or 0), 1.0)
         out: list[Segment] = []
         # raw_segments is a generator: the real work (and any CUDA error)
         # happens while looping, so this loop must run inside the try block
@@ -29,11 +31,13 @@ class WhisperTranscriber:
         for s in raw_segments:
             words = [Word(w.start, w.end, w.word.strip()) for w in (s.words or [])]
             out.append(Segment(s.start, s.end, s.text.strip(), words))
+            if on_progress:
+                on_progress(min(1.0, s.end / total))
         return out
 
-    def transcribe(self, media_path: Path) -> list[Segment]:
+    def transcribe(self, media_path: Path, on_progress=None) -> list[Segment]:
         try:
-            return self._run(media_path)
+            return self._run(media_path, on_progress)
         except RuntimeError as e:
             # Example: "Library cublas64_12.dll is not found or cannot be loaded"
             if self.device == "cpu":
@@ -41,4 +45,4 @@ class WhisperTranscriber:
             print(f"GPU failed ({e}). Falling back to CPU...")
             self.device = "cpu"   # remember, so later videos skip the GPU attempt
             self._model = None    # drop the broken GPU model so _load() rebuilds it on CPU
-            return self._run(media_path)
+            return self._run(media_path, on_progress)
