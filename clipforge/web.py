@@ -66,7 +66,7 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
             path = urllib.parse.urlsplit(self.path).path
             if path == "/":
                 return self._file(template_dir / "index.html")
-            if path in ("/app.js", "/styles.css"):
+            if path in ("/app.js", "/styles.css", "/logo.png"):
                 return self._file(template_dir / path.lstrip("/"))
             if path == "/api/jobs":
                 with JobStore(data_dir / "clipforge.db") as jobs:

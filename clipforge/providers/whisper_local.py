@@ -17,13 +17,28 @@ class WhisperTranscriber:
             self._model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
         return self._model
 
-    def transcribe(self, media_path: Path) -> list[Segment]:
+    def _run(self, media_path: Path) -> list[Segment]:
         model = self._load()
         raw_segments, _info = model.transcribe(
             str(media_path), word_timestamps=True, vad_filter=True
         )
         out: list[Segment] = []
+        # raw_segments is a generator: the real work (and any CUDA error)
+        # happens while looping, so this loop must run inside the try block
+        # in transcribe() below.
         for s in raw_segments:
             words = [Word(w.start, w.end, w.word.strip()) for w in (s.words or [])]
             out.append(Segment(s.start, s.end, s.text.strip(), words))
         return out
+
+    def transcribe(self, media_path: Path) -> list[Segment]:
+        try:
+            return self._run(media_path)
+        except RuntimeError as e:
+            # Example: "Library cublas64_12.dll is not found or cannot be loaded"
+            if self.device == "cpu":
+                raise  # already on CPU, so this is a different problem
+            print(f"GPU failed ({e}). Falling back to CPU...")
+            self.device = "cpu"   # remember, so later videos skip the GPU attempt
+            self._model = None    # drop the broken GPU model so _load() rebuilds it on CPU
+            return self._run(media_path)
