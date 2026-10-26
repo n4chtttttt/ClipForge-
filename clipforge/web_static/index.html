@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111313">
+  <title>ClipForge — local video cuts</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="/" aria-label="ClipForge home"><span class="brand-mark">CF</span><span>CLIPFORGE</span></a>
+    <div class="topbar-center"><span class="live-dot"></span><span>LOCAL WORKSPACE</span></div>
+    <div class="topbar-right"><span class="version">v1.0</span><span class="privacy">Runs on this computer</span></div>
+  </header>
+
+  <main class="workspace">
+    <aside class="setup-panel">
+      <div class="panel-heading"><div><p class="eyebrow">NEW CUT</p><h1>Make clips</h1></div><span class="step-badge">01</span></div>
+      <p class="intro">Choose a source and tune how ClipForge finds moments.</p>
+
+      <label class="field-label" for="video-file">SOURCE VIDEO</label>
+      <label class="dropzone" id="dropzone" for="video-file">
+        <input id="video-file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,video/x-m4v,.mp4,.mov,.mkv,.avi,.webm,.m4v">
+        <span class="upload-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></span>
+        <strong id="file-name">Drop a video here</strong>
+        <span id="file-hint">or <span class="text-link">browse files</span></span>
+        <span class="file-types">MP4 · MOV · MKV · WEBM</span>
+      </label>
+
+      <div class="option-group">
+        <div class="section-label"><span>CLIP LENGTH</span><span id="duration-value">20–55 sec</span></div>
+        <div class="range-row"><label for="min-duration">Minimum</label><input id="min-duration" type="number" min="5" max="170" value="20"><span>sec</span></div>
+        <div class="range-row"><label for="max-duration">Maximum</label><input id="max-duration" type="number" min="6" max="180" value="55"><span>sec</span></div>
+      </div>
+
+      <div class="option-row">
+        <label for="clip-count">CLIPS TO FIND</label>
+        <select id="clip-count"><option value="3">3 clips</option><option value="5" selected>5 clips</option><option value="8">8 clips</option><option value="10">10 clips</option></select>
+      </div>
+      <div class="option-group compact">
+        <div class="section-label"><span>TRANSCRIPTION</span></div>
+        <div class="select-row"><label for="model">Model</label><select id="model"><option value="tiny">Tiny · fastest</option><option value="base">Base · balanced</option><option value="small" selected>Small · accurate</option></select></div>
+        <div class="select-row"><label for="device">Device</label><select id="device"><option value="auto" selected>Auto detect</option><option value="cpu">CPU</option><option value="cuda">NVIDIA GPU</option></select></div>
+      </div>
+
+      <div id="error-banner" class="error-banner" role="alert" hidden></div>
+      <button id="start-button" class="primary-button" disabled><span>Find moments</span><span class="button-arrow">↗</span></button>
+      <p class="local-note">Your video and clips stay in the local <code>data/</code> folder.</p>
+    </aside>
+
+    <section class="review-panel" aria-label="Clip review workspace">
+      <div class="review-header"><div><p class="eyebrow">REVIEW DESK</p><h2 id="review-title">Your cuts, in one place</h2></div><button id="refresh-button" class="icon-button" title="Refresh jobs" aria-label="Refresh jobs"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.6 9a7 7 0 0 1 11.9-2L20 12M4 12l2.5 5a7 7 0 0 0 11.9-2"/></svg></button></div>
+      <div id="job-strip" class="job-strip" aria-label="Recent jobs"></div>
+
+      <div id="empty-state" class="empty-state">
+        <div class="empty-frame"><span class="frame-corner top-left"></span><span class="frame-corner top-right"></span><span class="frame-corner bottom-left"></span><span class="frame-corner bottom-right"></span><div class="play-mark"><svg viewBox="0 0 24 24"><path d="m9 6 9 6-9 6z"/></svg></div><span class="frame-timecode">00:00:00:00</span></div>
+        <p class="empty-kicker">THE REVIEW DESK IS READY</p><h3>Start with a source video</h3><p>Generated clips will appear here, ready to watch and download.</p>
+      </div>
+
+      <div id="job-view" hidden>
+        <div id="progress-panel" class="progress-panel" hidden><div class="progress-copy"><div><span class="status-dot"></span><strong id="job-stage">Preparing job</strong></div><span id="job-percent">0%</span></div><div class="progress-track"><span id="progress-fill"></span></div><div class="job-foot"><span id="job-source"></span><button id="logs-toggle" class="text-button" aria-expanded="false">Show log</button></div><pre id="job-logs" hidden></pre><div id="job-failure" class="job-failure" hidden></div></div>
+        <div id="clips-section" hidden>
+          <div class="viewer-layout">
+            <div class="viewer"><video id="clip-player" controls playsinline preload="metadata"></video><div id="player-empty" class="player-empty" hidden><p>Select a clip to preview</p></div></div>
+            <div class="clip-inspector"><p class="eyebrow">SELECTED CLIP</p><h3 id="clip-title">—</h3><div class="inspector-rule"></div><div class="meta-line"><span>TIME RANGE</span><strong id="clip-range">—</strong></div><div class="meta-line"><span>DURATION</span><strong id="clip-duration">—</strong></div><div class="meta-line"><span>MOMENT SCORE</span><strong id="clip-score">—</strong></div><div class="meta-line reason-line"><span>WHY THIS MOMENT</span><strong id="clip-reason">—</strong></div><a id="download-link" class="download-button" href="#" download><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 17v3h16v-3"/></svg>Download clip</a></div>
+          </div>
+          <div class="clips-heading"><div><p class="eyebrow">OUTPUT CLIPS</p><h3><span id="clip-total">0</span> clips</h3></div><span class="clips-hint">Select a clip to review</span></div>
+          <div id="clip-list" class="clip-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
