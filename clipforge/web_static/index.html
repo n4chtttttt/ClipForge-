@@ -32,9 +32,8 @@
       </label>
 
       <div class="option-group">
-        <div class="section-label"><span>CLIP LENGTH</span><span id="duration-value">20–55 sec</span></div>
-        <div class="range-row"><label for="min-duration">Minimum</label><input id="min-duration" type="number" min="5" max="170" value="20"><span>sec</span></div>
-        <div class="range-row"><label for="max-duration">Maximum</label><input id="max-duration" type="number" min="6" max="180" value="55"><span>sec</span></div>
+        <div class="section-label"><span>CLIP LENGTH</span><span id="duration-value">20 sec min · up to 32 sec max</span></div>
+        <div class="range-row"><label for="min-duration">Minimum</label><input id="min-duration" type="number" min="5" max="90" value="20"><span>sec</span></div>
       </div>
 
       <div class="option-row">
@@ -43,13 +42,15 @@
       </div>
       <div class="option-group compact">
         <div class="section-label"><span>TRANSCRIPTION</span></div>
-        <div class="select-row"><label for="model">Model</label><select id="model"><option value="tiny">Tiny · fastest</option><option value="base">Base · balanced</option><option value="small" selected>Small · accurate</option></select></div>
+        <div class="select-row"><label for="model">Model</label><select id="model"><option value="tiny">Tiny · fastest</option><option value="base">Base · balanced</option><option value="small" selected>Small · accurate</option><option value="medium">Medium · best of these, slower</option></select></div>
         <div class="select-row"><label for="device">Device</label><select id="device"><option value="auto" selected>Auto detect</option><option value="cpu">CPU</option><option value="cuda">NVIDIA GPU</option></select></div>
+        <div class="select-row"><label for="language">Language</label><select id="language"><option value="auto" selected>Auto detect</option><option value="en">English</option><option value="tl">Tagalog</option><option value="mixed">English + Tagalog</option></select></div>
+        <div class="select-row"><label for="scorer-mode">Clip ranking</label><select id="scorer-mode"><option value="enhanced" selected>Enhanced · local AI + frames</option><option value="heuristic">Fast · basic scoring</option></select></div>
       </div>
 
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
       <button id="start-button" class="primary-button" disabled><span>Find moments</span><span class="button-arrow">↗</span></button>
-      <p class="local-note">Your video and clips stay in the local <code>data/</code> folder.</p>
+      <p class="local-note">Enhanced ranking uses local Ollama. If it is unavailable, ClipForge falls back to basic scoring.</p>
     </aside>
 
     <section class="review-panel" aria-label="Clip review workspace">
@@ -77,7 +78,7 @@
         <div id="clips-section" hidden>
           <div class="viewer-layout">
             <div class="viewer"><video id="clip-player" controls playsinline preload="metadata"></video><div id="player-empty" class="player-empty" hidden><p>Select a clip to preview</p></div></div>
-            <div class="clip-inspector"><p class="eyebrow">SELECTED CLIP</p><h3 id="clip-title">—</h3><div class="inspector-rule"></div><div class="meta-line"><span>TIME RANGE</span><strong id="clip-range">—</strong></div><div class="meta-line"><span>DURATION</span><strong id="clip-duration">—</strong></div><div class="meta-line"><span>MOMENT SCORE</span><strong id="clip-score">—</strong></div><div class="meta-line reason-line"><span>WHY THIS MOMENT</span><strong id="clip-reason">—</strong></div><a id="download-link" class="download-button" href="#" download><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 17v3h16v-3"/></svg>Download clip</a></div>
+            <div class="clip-inspector"><p class="eyebrow">SELECTED CLIP</p><h3 id="clip-title">—</h3><div class="inspector-rule"></div><div class="meta-line"><span>TIME RANGE</span><strong id="clip-range">—</strong></div><div class="meta-line"><span>DURATION</span><strong id="clip-duration">—</strong></div><div class="meta-line"><span>MOMENT SCORE</span><strong id="clip-score">—</strong></div><div class="meta-line reason-line"><span>WHY THIS MOMENT</span><strong id="clip-reason">—</strong></div><div class="feedback-actions"><button id="feedback-keep" type="button">Good clip</button><button id="feedback-reject" type="button">Not engaging</button></div><a id="download-link" class="download-button" href="#" download><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 17v3h16v-3"/></svg>Download clip</a></div>
           </div>
           <div class="clips-heading"><div><p class="eyebrow">OUTPUT CLIPS</p><h3><span id="clip-total">0</span> clips</h3></div><span class="clips-hint">Select a clip to review</span></div>
           <div id="clip-list" class="clip-list"></div>

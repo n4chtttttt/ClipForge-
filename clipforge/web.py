@@ -16,6 +16,7 @@ from .config import Settings
 from .jobs import JobStore
 from .pipeline import run_pipeline
 from .providers.heuristic_scorer import HeuristicScorer
+from .providers.ollama_scorer import OllamaScorer
 from .providers.whisper_local import WhisperTranscriber
 from .render import ffmpeg_ok
 
@@ -33,7 +34,7 @@ def _safe_name(raw: str) -> str:
 
 
 def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_factory=None,
-                  scorer_factory=HeuristicScorer, renderer=None) -> ThreadingHTTPServer:
+                  scorer_factory=None, renderer=None) -> ThreadingHTTPServer:
     data_dir = data_dir.resolve()
     upload_dir = data_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -41,7 +42,7 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
     with JobStore(data_dir / "clipforge.db") as jobs:
         jobs.fail_interrupted()
     transcriber_factory = transcriber_factory or (lambda opts: WhisperTranscriber(
-        opts["model"], opts["device"], "int8"))
+        opts["model"], opts["device"], "int8", opts.get("language", "auto")))
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ClipForgeLocal/1.0"
@@ -92,6 +93,9 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
                 return self._upload()
             if path == "/api/jobs":
                 return self._start_job()
+            match = re.fullmatch(r"/api/jobs/([a-f0-9]{8})/feedback", path)
+            if match:
+                return self._save_feedback(match.group(1))
             return self._json({"error": "Not found"}, 404)
 
         def do_DELETE(self):
@@ -139,6 +143,26 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
                 return self._json({"error": "The upload did not finish. Try again."}, 400)
             return self._json({"upload_id": upload_id, "filename": name, "bytes": length}, 201)
 
+        def _save_feedback(self, job_id: str):
+            try:
+                body = self._body_json()
+                clip_index = int(body.get("clip_index", -1))
+                rating_value = body.get("rating")
+                if rating_value not in {"keep", "reject"}:
+                    raise ValueError("Choose keep or reject feedback.")
+                rating = 1 if rating_value == "keep" else -1
+                with JobStore(data_dir / "clipforge.db") as jobs:
+                    job = jobs.get(job_id)
+                    if job is None:
+                        return self._json({"error": "Job not found"}, 404)
+                    moments = (job.get("result") or {}).get("moments") or []
+                    if not 0 <= clip_index < len(moments):
+                        raise ValueError("That clip does not exist in this job.")
+                    jobs.set_feedback(job_id, clip_index, rating)
+                return self._json({"saved": True, "clip_index": clip_index, "rating": rating_value})
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                return self._json({"error": str(exc)}, 400)
+
         def _start_job(self):
             try:
                 body = self._body_json()
@@ -152,13 +176,23 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
                     raise ValueError("Job options must be an object.")
                 top_n = int(options.get("top_n", 5))
                 minimum = float(options.get("min_clip_seconds", 20))
-                maximum = float(options.get("max_clip_seconds", 55))
+                maximum_value = options.get("max_clip_seconds")
+                maximum = float(maximum_value) if maximum_value is not None else None
                 model = str(options.get("whisper_model", "small"))
                 device = str(options.get("whisper_device", "auto"))
-                if not 1 <= top_n <= 10 or not 5 <= minimum < maximum <= 180:
-                    raise ValueError("Use 1–10 clips and a valid duration between 5 and 180 seconds.")
-                if model not in {"tiny", "base", "small"} or device not in {"auto", "cpu", "cuda"}:
+                language = str(options.get("whisper_language", "auto"))
+                scorer_mode = str(options.get("scorer_mode", "heuristic"))
+                ranker_model = str(options.get("ranker_model", "qwen2.5vl:3b"))
+                if not 1 <= top_n <= 10 or not 5 <= minimum <= 90:
+                    raise ValueError("Use 1–10 clips and a minimum duration between 5 and 90 seconds.")
+                if maximum is not None and not minimum < maximum <= 180:
+                    raise ValueError("The optional maximum must be greater than the minimum and no more than 180 seconds.")
+                if model not in {"tiny", "base", "small", "medium"} or device not in {"auto", "cpu", "cuda"}:
                     raise ValueError("Choose a supported transcription model and device.")
+                if language not in {"auto", "en", "tl", "mixed"}:
+                    raise ValueError("Choose Auto, English, Tagalog, or English/Tagalog mixed transcription.")
+                if scorer_mode not in {"heuristic", "enhanced"}:
+                    raise ValueError("Choose Fast or Enhanced clip ranking.")
                 source = next((p for p in upload_dir.glob(upload_id + "_*") if p.suffix.lower() in VIDEO_TYPES), None)
                 if source is None or not source.resolve().is_relative_to(upload_dir.resolve()):
                     raise ValueError("That uploaded source is no longer available. Upload it again.")
@@ -176,8 +210,18 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
 
             def work():
                 try:
-                    run_pipeline(source, settings, transcriber_factory({"model": model, "device": device}),
-                                 scorer_factory(), render=True, job_id=job_id,
+                    if scorer_factory:
+                        scorer = scorer_factory()
+                    elif scorer_mode == "enhanced":
+                        with JobStore(settings.db_path) as jobs:
+                            examples = jobs.feedback_examples()
+                        scorer = OllamaScorer(model=ranker_model, feedback_examples=examples)
+                    else:
+                        scorer = HeuristicScorer()
+                    run_pipeline(source, settings, transcriber_factory({
+                        "model": model, "device": device, "language": language,
+                    }), scorer,
+                                 render=True, job_id=job_id,
                                  **({"renderer": renderer} if renderer else {}), log=lambda _message: None)
                 except Exception as exc:
                     print(f"[job {job_id}] {exc!r}")

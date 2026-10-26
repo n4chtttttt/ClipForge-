@@ -17,5 +17,6 @@ class Transcriber(Protocol):
 
 class MomentScorer(Protocol):
     def find_moments(
-        self, segments: list[Segment], *, min_seconds: float, max_seconds: float, top_n: int
+        self, segments: list[Segment], *, min_seconds: float,
+        max_seconds: float | None = None, top_n: int
     ) -> list[Moment]: ...

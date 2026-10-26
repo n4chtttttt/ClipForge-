@@ -18,6 +18,10 @@ class JobStore(AbstractContextManager):
             "error TEXT, created REAL, result TEXT, progress INTEGER NOT NULL DEFAULT 0, "
             "stage TEXT NOT NULL DEFAULT 'Queued', logs TEXT NOT NULL DEFAULT '[]')"
         )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS clip_feedback (job_id TEXT NOT NULL, clip_index INTEGER NOT NULL, "
+            "rating INTEGER NOT NULL, created REAL NOT NULL, PRIMARY KEY(job_id, clip_index))"
+        )
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(jobs)")}
         for name, declaration in (("progress", "INTEGER NOT NULL DEFAULT 0"),
                                   ("stage", "TEXT NOT NULL DEFAULT 'Queued'"),
@@ -72,8 +76,37 @@ class JobStore(AbstractContextManager):
         self.db.commit()
 
     def delete(self, job_id: str) -> None:
+        self.db.execute("DELETE FROM clip_feedback WHERE job_id=?", (job_id,))
         self.db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
         self.db.commit()
+
+    def set_feedback(self, job_id: str, clip_index: int, rating: int) -> None:
+        self.db.execute(
+            "INSERT INTO clip_feedback (job_id,clip_index,rating,created) VALUES (?,?,?,?) "
+            "ON CONFLICT(job_id,clip_index) DO UPDATE SET rating=excluded.rating,created=excluded.created",
+            (job_id, clip_index, rating, time.time()),
+        )
+        self.db.commit()
+
+    def feedback_examples(self, limit: int = 20) -> list[dict]:
+        rows = self.db.execute(
+            "SELECT j.result,f.clip_index,f.rating FROM clip_feedback f "
+            "JOIN jobs j ON j.id=f.job_id ORDER BY f.created DESC LIMIT ?",
+            (max(0, limit),),
+        ).fetchall()
+        examples = []
+        for row in rows:
+            try:
+                moments = json.loads(row["result"] or "{}").get("moments", [])
+                moment = moments[int(row["clip_index"])]
+            except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError):
+                continue
+            examples.append({
+                "rating": "keep" if row["rating"] > 0 else "reject",
+                "example_title": str(moment.get("title", ""))[:160],
+                "reason": str(moment.get("reason", ""))[:160],
+            })
+        return examples
 
     def fail_interrupted(self) -> None:
         """Jobs still 'running' or 'queued' at server start were cut off when the app closed."""
@@ -89,6 +122,12 @@ class JobStore(AbstractContextManager):
         item = dict(row)
         item["result"] = json.loads(item["result"]) if item["result"] else None
         item["logs"] = json.loads(item["logs"] or "[]")
+        item["feedback"] = {
+            str(feedback["clip_index"]): feedback["rating"]
+            for feedback in self.db.execute(
+                "SELECT clip_index,rating FROM clip_feedback WHERE job_id=?", (job_id,)
+            )
+        }
         return item
 
     def list(self) -> list[dict]:

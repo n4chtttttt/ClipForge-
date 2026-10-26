@@ -123,9 +123,27 @@ function selectClip(index) {
   $('clip-duration').textContent = `${Math.round(moment.end - moment.start)} sec`;
   $('clip-score').textContent = Number(moment.score).toFixed(1);
   $('clip-reason').textContent = moment.reason || '—';
+  const rating = job.feedback?.[String(index)];
+  $('feedback-keep').classList.toggle('active', rating === 1);
+  $('feedback-reject').classList.toggle('active', rating === -1);
   $('download-link').href = `${url}?download=1`;
   $('download-link').download = `clipforge_${job.id}_clip_${String(index + 1).padStart(2, '0')}.mp4`;
   for (const row of $('clip-list').querySelectorAll('.clip-row')) row.classList.toggle('active', Number(row.dataset.index) === index);
+}
+
+async function saveFeedback(rating) {
+  const job = state.jobs.find(item => item.id === state.selectedJob);
+  if (!job) return;
+  try {
+    await request(`/api/jobs/${job.id}/feedback`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({clip_index: state.selectedClip, rating})
+    });
+    job.feedback ||= {};
+    job.feedback[String(state.selectedClip)] = rating === 'keep' ? 1 : -1;
+    selectClip(state.selectedClip);
+  } catch (error) { showError(error.message); }
 }
 
 function renderClips(job) {
@@ -140,7 +158,7 @@ function renderClips(job) {
   if (!moments.length) {
     const empty = document.createElement('div');
     empty.className = 'no-clips';
-    empty.textContent = 'No moments met the current scoring criteria. Try a longer source or wider clip duration.';
+    empty.textContent = 'No moments met the current scoring criteria. Try a longer source or a shorter minimum duration.';
     list.append(empty);
     $('player-empty').hidden = false;
     $('clip-player').removeAttribute('src');
@@ -280,7 +298,7 @@ async function startJob() {
   try {
     const data = await request('/api/jobs', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
       upload_id: state.upload.upload_id,
-      options: {top_n: Number($('clip-count').value), min_clip_seconds: Number($('min-duration').value), max_clip_seconds: Number($('max-duration').value), whisper_model: $('model').value, whisper_device: $('device').value}
+      options: {top_n: Number($('clip-count').value), min_clip_seconds: Number($('min-duration').value), whisper_model: $('model').value, whisper_device: $('device').value, whisper_language: $('language').value, scorer_mode: $('scorer-mode').value, ranker_model: 'qwen2.5vl:3b'}
     })});
     state.selectedJob = data.job_id;
     state.sessionJobs.add(data.job_id);
@@ -293,6 +311,8 @@ async function startJob() {
 
 $('video-file').addEventListener('change', event => uploadFile(event.target.files[0]));
 $('start-button').addEventListener('click', startJob);
+$('feedback-keep').addEventListener('click', () => saveFeedback('keep'));
+$('feedback-reject').addEventListener('click', () => saveFeedback('reject'));
 $('refresh-button').addEventListener('click', loadJobs);
 $('tab-desk').addEventListener('click', () => setView('desk'));
 $('tab-library').addEventListener('click', () => { setView('library'); loadJobs(); });
@@ -302,7 +322,12 @@ $('logs-toggle').addEventListener('click', () => {
   $('logs-toggle').setAttribute('aria-expanded', String(!logs.hidden));
   $('logs-toggle').textContent = logs.hidden ? 'Show log' : 'Hide log';
 });
-for (const input of [$('min-duration'), $('max-duration')]) input.addEventListener('input', () => $('duration-value').textContent = `${$('min-duration').value}–${$('max-duration').value} sec`);
+function updateDurationLabel() {
+  const minimum = Number($('min-duration').value) || 20;
+  const maximum = Math.min(minimum * 1.6, 90);
+  $('duration-value').textContent = `${minimum} sec min · up to ${Math.round(maximum)} sec max`;
+}
+$('min-duration').addEventListener('input', updateDurationLabel);
 const drop = $('dropzone');
 for (const event of ['dragenter', 'dragover']) drop.addEventListener(event, e => { e.preventDefault(); drop.classList.add('dragging'); });
 for (const event of ['dragleave', 'drop']) drop.addEventListener(event, e => { e.preventDefault(); drop.classList.remove('dragging'); });

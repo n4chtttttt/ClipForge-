@@ -755,6 +755,28 @@ button {
   font-weight: 650;
 }
 
+.feedback-actions {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 10px;
+}
+
+.feedback-actions button {
+  flex: 1;
+  border: 1px solid var(--line, #303534);
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--text, #e7ece9);
+  background: var(--panel, #171b1a);
+  cursor: pointer;
+}
+
+.feedback-actions button:hover,
+.feedback-actions button.active {
+  border-color: var(--accent, #a8f09a);
+  color: var(--accent, #a8f09a);
+}
+
 .download-button:hover {
   background: #dbff89;
 }

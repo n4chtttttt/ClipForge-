@@ -106,6 +106,5 @@ class WebTests(unittest.TestCase):
             self.assertEqual(opened.get(job_id)["status"], "queued")
         self.assertIsNone(store.db)
 
-
 if __name__ == "__main__":
     unittest.main()

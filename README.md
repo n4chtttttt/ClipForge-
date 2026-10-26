@@ -7,16 +7,43 @@ A local-first Python application for finding potential YouTube Shorts moments in
 ## Features
 
 - Local web interface for selecting and uploading videos.
-- Adjustable minimum and maximum clip durations.
+- Adjustable minimum clip duration with an automatically calculated maximum.
 - Configurable number of candidate clips.
-- Speech transcription using Faster-Whisper.
-- Heuristic scoring to identify potential engaging moments.
+- Speech transcription using Faster-Whisper, with automatic, English, Tagalog, and mixed-language modes.
+- Word-timed cut selection that considers pauses, sentence endings, and dangling words.
+- Optional local Ollama ranking using transcript meaning, sampled video frames, and relative audio-energy cues. ClipForge falls back to heuristic scoring when the local ranker is unavailable.
+- Per-clip keep/reject feedback saved locally and used as examples in later enhanced-ranking runs.
 - Background job processing with progress and error logs.
 - Clip preview and download functionality.
 - Local SQLite database for job history.
 - FFmpeg-based video rendering and subtitle generation.
 
-Clip scoring is heuristic-based. It does not guarantee that a clip will be engaging, viral, or suitable for publication. Some generated clips may have awkward beginnings or endings.
+The maximum candidate duration is capped at 1.6 times the selected minimum, up to 90 seconds. This is ClipForge’s selection limit; it is not YouTube’s Shorts length limit.
+
+## Optional local AI ranking with Ollama
+
+Ollama and its model are installed separately and are **not included when you clone this repository**. Enhanced ranking requires Ollama 0.7.0 or later and the `qwen2.5vl:3b` model.
+
+1. Install Ollama from [ollama.com/download](https://ollama.com/download).
+2. Open PowerShell and download the model:
+
+   ```powershell
+   ollama pull qwen2.5vl:3b
+   ```
+
+3. Confirm the model is installed:
+
+   ```powershell
+   ollama list
+   ```
+
+4. Start ClipForge and select **Enhanced ranking**.
+
+When using the local Ollama service, ranking inputs are processed on your computer. If Ollama or the model is unavailable, ClipForge can fall back to heuristic scoring.
+
+**Check the job log:** if it shows `HTTP Error 400` and `heuristic fallback`, the clips may still finish rendering, but Ollama did not rank them successfully. A completed job does not by itself mean the local AI ranking worked.
+
+The model scores transcripts in their original language, but Tagalog and Taglish accuracy should be checked on your own videos. Scoring does not guarantee that a clip will be engaging or suitable for publication; preview clips before publishing.
 
 ## Requirements
 
@@ -31,7 +58,7 @@ Clip scoring is heuristic-based. It does not guarantee that a clip will be engag
 
 Install Python 3.12 from the official Python website:
 
-https://www.python.org/downloads/
+[python.org/downloads](https://www.python.org/downloads/)
 
 Verify the installation:
 
@@ -57,11 +84,11 @@ If the command is not recognized, check that FFmpeg is installed and included in
 
 ### 3. Clone the repository
 
-Replace `YOUR_GITHUB_USERNAME` with the repository owner's GitHub username.
+Replace the URL below with the actual URL of your GitHub repository:
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB_USERNAME/clipforge.git
-cd clipforge
+git clone https://github.com/n4chtttttt/ClipForge-.git
+cd REPOSITORY
 ```
 
 ### 4. Create a virtual environment
@@ -71,7 +98,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-If PowerShell blocks environment activation, consult the Python documentation for your system's activation-policy options.
+If PowerShell blocks environment activation, consult the Python documentation for your system’s activation-policy options.
 
 ### 5. Install dependencies
 
@@ -89,7 +116,7 @@ python -m clipforge.web
 
 Open this address in your browser:
 
-http://127.0.0.1:8766
+[http://127.0.0.1:8766](http://127.0.0.1:8766)
 
 Keep the terminal open while using ClipForge. Press `Ctrl+C` in that terminal to stop the server.
 
@@ -113,11 +140,12 @@ ClipForge stores application data and generated files locally. Depending on the 
 - Job metadata and logs
 - The SQLite database
 
-These files are intentionally excluded from Git.
+These files should not be committed to Git.
 
 ## Known limitations
 
 - Clip selection uses heuristic scoring and may produce clips with weak openings or endings.
+- Local AI ranking may fall back to heuristic scoring if Ollama is unavailable or rejects a request.
 - GPU transcription may fail if the required CUDA libraries are unavailable.
 - CPU transcription is an alternative, but performance depends on the computer and model size.
 - Real-world video rendering and playback should be tested on the target computer.

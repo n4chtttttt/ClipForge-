@@ -52,12 +52,14 @@ def run_pipeline(
         (job_dir / "transcript.json").write_text(json.dumps(segments_to_dict(segments)), encoding="utf-8")
 
         emit("[2/3] Finding engaging moments ...", stage="Finding moments", progress=45)
-        moments = scorer.find_moments(
-            segments,
-            min_seconds=settings.min_clip_seconds,
-            max_seconds=settings.max_clip_seconds,
-            top_n=settings.top_n,
-        )
+        scorer_options = {
+            "min_seconds": settings.min_clip_seconds,
+            "max_seconds": settings.max_clip_seconds,
+            "top_n": settings.top_n,
+        }
+        if "source" in inspect.signature(scorer.find_moments).parameters:
+            scorer_options["source"] = source
+        moments = scorer.find_moments(segments, **scorer_options)
         for i, m in enumerate(moments, 1):
             emit(f"   #{i} {m.start:6.1f}-{m.end:6.1f}s  score {m.score:4.1f}  ({m.reason})")
 

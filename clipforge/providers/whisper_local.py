@@ -7,8 +7,10 @@ from ..models import Segment, Word
 class WhisperTranscriber:
     """Local speech-to-text using faster-whisper (free, runs on your GPU or CPU)."""
 
-    def __init__(self, model_size: str = "small", device: str = "auto", compute_type: str = "int8"):
+    def __init__(self, model_size: str = "small", device: str = "auto", compute_type: str = "int8",
+                 language: str = "auto"):
         self.model_size, self.device, self.compute_type = model_size, device, compute_type
+        self.language = language
         self._model = None
 
     def _load(self):
@@ -19,10 +21,18 @@ class WhisperTranscriber:
 
     def _run(self, media_path: Path, on_progress=None) -> list[Segment]:
         model = self._load()
-        raw_segments, info = model.transcribe(
-            str(media_path), word_timestamps=True, vad_filter=True,
-            beam_size=1, condition_on_previous_text=False,  # faster, tiny accuracy cost
-        )
+        options = {
+            "word_timestamps": True,
+            "vad_filter": True,
+            "beam_size": 1,
+            "condition_on_previous_text": False,
+        }
+        if self.language in {"en", "tl"}:
+            options["language"] = self.language
+        elif self.language == "mixed":
+            # Requires faster-whisper 1.1+; detect language while decoding segments.
+            options["multilingual"] = True
+        raw_segments, info = model.transcribe(str(media_path), **options)
         total = max(float(getattr(info, "duration", 0) or 0), 1.0)
         out: list[Segment] = []
         # raw_segments is a generator: the real work (and any CUDA error)

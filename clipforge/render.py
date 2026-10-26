@@ -39,7 +39,8 @@ def render_short(
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-ss", f"{moment.start:.2f}", "-t", f"{moment.duration:.2f}", "-i", str(source.resolve()),
         "-filter_complex", vf, "-map", "[v]", "-map", "0:a?",
-        *encoder, "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path.name,
+        *encoder, "-af", f"afade=t=out:st={max(0.0, moment.duration - 0.2):.2f}:d=0.2",
+        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path.name,
     ]
     # Run inside the output folder so the subtitle filename needs no Windows path escaping.
     subprocess.run(cmd, cwd=out_path.parent, check=True)
