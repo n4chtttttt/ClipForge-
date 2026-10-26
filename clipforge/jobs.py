@@ -71,6 +71,17 @@ class JobStore(AbstractContextManager):
         self.db.execute("UPDATE jobs SET status='failed', stage='Failed', error=? WHERE id=?", (error, job_id))
         self.db.commit()
 
+    def delete(self, job_id: str) -> None:
+        self.db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        self.db.commit()
+
+    def fail_interrupted(self) -> None:
+        """Jobs still 'running' or 'queued' at server start were cut off when the app closed."""
+        self.db.execute("UPDATE jobs SET status='failed', stage='Interrupted', "
+                        "error='ClipForge was closed before this job finished.' "
+                        "WHERE status IN ('queued','running')")
+        self.db.commit()
+
     def get(self, job_id: str) -> dict | None:
         row = self.db.execute("SELECT id,source,status,error,result,created,progress,stage,logs FROM jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:

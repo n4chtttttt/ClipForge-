@@ -1,5 +1,21 @@
 const $ = (id) => document.getElementById(id);
-const state = {upload: null, jobs: [], selectedJob: null, selectedClip: 0, poller: null, busy: false};
+const state = {upload: null, jobs: [], selectedJob: null, selectedClip: 0, poller: null, busy: false,
+  view: 'desk', sessionJobs: new Set()};
+
+function displayName(job) {
+  // Upload files are stored as "<32 hex id>_<name>"; hide the id from the UI.
+  return (job.source || 'Video job').split(/[\\/]/).pop().replace(/^[a-f0-9]{32}_/, '');
+}
+
+function setView(view) {
+  state.view = view;
+  $('desk-view').hidden = view !== 'desk';
+  $('library-view').hidden = view !== 'library';
+  for (const [id, name] of [['tab-desk', 'desk'], ['tab-library', 'library']]) {
+    $(id).classList.toggle('active', view === name);
+    $(id).setAttribute('aria-selected', String(view === name));
+  }
+}
 
 function showError(message) {
   const box = $('error-banner');
@@ -60,7 +76,9 @@ async function uploadFile(file) {
 function renderJobs() {
   const strip = $('job-strip');
   strip.replaceChildren();
-  for (const job of state.jobs) {
+  const visible = state.jobs.filter(job => state.sessionJobs.has(job.id) || ['running', 'queued'].includes(job.status));
+  strip.hidden = visible.length === 0;
+  for (const job of visible) {
     const button = document.createElement('button');
     button.className = `job-tab${job.id === state.selectedJob ? ' active' : ''}`;
     button.type = 'button';
@@ -68,7 +86,7 @@ function renderJobs() {
     title.className = 'tab-top';
     const name = document.createElement('span');
     name.className = 'tab-title';
-    name.textContent = (job.source || 'Video job').split(/[\\/]/).pop();
+    name.textContent = displayName(job)
     title.append(name);
     const status = document.createElement('div');
     status.className = `tab-state ${job.status}`;
@@ -148,6 +166,61 @@ function renderClips(job) {
   selectClip(state.selectedClip);
 }
 
+function renderLibrary() {
+  $('library-count').textContent = String(state.jobs.length);
+  const list = $('library-list');
+  list.replaceChildren();
+  if (!state.jobs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'library-empty';
+    empty.textContent = 'Nothing saved yet. Clips you make will show up here.';
+    list.append(empty);
+    return;
+  }
+  for (const job of state.jobs) {
+    const card = document.createElement('div');
+    card.className = 'library-card';
+    const info = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'library-name';
+    name.textContent = displayName(job);
+    name.title = displayName(job);
+    const meta = document.createElement('div');
+    meta.className = 'library-meta';
+    const status = document.createElement('span');
+    status.className = job.status;
+    status.textContent = job.status;
+    const count = job.result?.clips?.length;
+    const when = new Date(job.created * 1000).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
+    meta.append(status, ` · ${count != null ? `${count} clips · ` : ''}${when}`);
+    info.append(name, meta);
+    const open = document.createElement('button');
+    open.type = 'button'; open.className = 'library-open'; open.textContent = 'Open';
+    open.addEventListener('click', () => openFromLibrary(job.id));
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'library-delete'; del.textContent = 'Delete';
+    del.addEventListener('click', () => deleteJob(job));
+    card.append(info, open, del);
+    list.append(card);
+  }
+}
+
+function openFromLibrary(id) {
+  state.sessionJobs.add(id);
+  setView('desk');
+  selectJob(id);
+}
+
+async function deleteJob(job) {
+  if (!confirm(`Delete "${displayName(job)}" and its clips from this computer? This can't be undone.`)) return;
+  try {
+    await request(`/api/jobs/${job.id}`, {method: 'DELETE'});
+    state.sessionJobs.delete(job.id);
+    if (state.selectedJob === job.id) state.selectedJob = null;
+    await loadJobs();
+  } catch (error) { showError(error.message); }
+}
+
 function renderSelectedJob() {
   const job = state.jobs.find(item => item.id === state.selectedJob);
   if (!job) {
@@ -158,7 +231,7 @@ function renderSelectedJob() {
   }
   $('empty-state').hidden = true;
   $('job-view').hidden = false;
-  $('review-title').textContent = (job.source || 'Video job').split(/[\\/]/).pop();
+  $('review-title').textContent = displayName(job);
   $('job-source').textContent = job.source || '';
   $('progress-panel').hidden = job.status === 'done';
   if (job.status !== 'done') {
@@ -178,9 +251,13 @@ async function loadJobs() {
     const previous = state.selectedJob;
     state.jobs = data.jobs || [];
     if (previous && state.jobs.some(job => job.id === previous)) state.selectedJob = previous;
-    else state.selectedJob = state.jobs[0]?.id || null;
+    else {
+      state.selectedJob = state.jobs.find(job => ['running', 'queued'].includes(job.status))?.id || null;
+      if (state.selectedJob) state.sessionJobs.add(state.selectedJob);
+    }
     renderJobs();
     renderSelectedJob();
+    renderLibrary();
     const active = state.jobs.some(job => ['running', 'queued'].includes(job.status));
     if (active && !state.poller) state.poller = setInterval(loadJobs, 1400);
     if (!active && state.poller) { clearInterval(state.poller); state.poller = null; }
@@ -206,7 +283,9 @@ async function startJob() {
       options: {top_n: Number($('clip-count').value), min_clip_seconds: Number($('min-duration').value), max_clip_seconds: Number($('max-duration').value), whisper_model: $('model').value, whisper_device: $('device').value}
     })});
     state.selectedJob = data.job_id;
+    state.sessionJobs.add(data.job_id);
     state.selectedClip = 0;
+    setView('desk');
     await loadJobs();
   } catch (error) { showError(error.message); }
   finally { state.busy = false; $('start-button').querySelector('span').textContent = 'Find moments'; $('start-button').disabled = !state.upload; }
@@ -215,6 +294,8 @@ async function startJob() {
 $('video-file').addEventListener('change', event => uploadFile(event.target.files[0]));
 $('start-button').addEventListener('click', startJob);
 $('refresh-button').addEventListener('click', loadJobs);
+$('tab-desk').addEventListener('click', () => setView('desk'));
+$('tab-library').addEventListener('click', () => { setView('library'); loadJobs(); });
 $('logs-toggle').addEventListener('click', () => {
   const logs = $('job-logs');
   logs.hidden = !logs.hidden;

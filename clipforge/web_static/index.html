@@ -54,7 +54,18 @@
 
     <section class="review-panel" aria-label="Clip review workspace">
       <div class="review-header"><div><p class="eyebrow">REVIEW DESK</p><h2 id="review-title">Your cuts, in one place</h2></div><button id="refresh-button" class="icon-button" title="Refresh jobs" aria-label="Refresh jobs"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.6 9a7 7 0 0 1 11.9-2L20 12M4 12l2.5 5a7 7 0 0 0 11.9-2"/></svg></button></div>
-      <div id="job-strip" class="job-strip" aria-label="Recent jobs"></div>
+      <nav class="view-tabs" role="tablist" aria-label="Workspace views">
+        <button id="tab-desk" class="view-tab active" type="button" role="tab" aria-selected="true">Review desk</button>
+        <button id="tab-library" class="view-tab" type="button" role="tab" aria-selected="false">Library <span id="library-count" class="tab-count">0</span></button>
+      </nav>
+
+      <div id="library-view" hidden>
+        <p class="library-intro">Everything you've clipped is saved here. Open a project to watch or download its clips again.</p>
+        <div id="library-list" class="library-list"></div>
+      </div>
+
+      <div id="desk-view">
+      <div id="job-strip" class="job-strip" aria-label="This session's jobs" hidden></div>
 
       <div id="empty-state" class="empty-state">
         <div class="empty-frame"><span class="frame-corner top-left"></span><span class="frame-corner top-right"></span><span class="frame-corner bottom-left"></span><span class="frame-corner bottom-right"></span><div class="play-mark"><svg viewBox="0 0 24 24"><path d="m9 6 9 6-9 6z"/></svg></div><span class="frame-timecode">00:00:00:00</span></div>
@@ -71,6 +82,7 @@
           <div class="clips-heading"><div><p class="eyebrow">OUTPUT CLIPS</p><h3><span id="clip-total">0</span> clips</h3></div><span class="clips-hint">Select a clip to review</span></div>
           <div id="clip-list" class="clip-list"></div>
         </div>
+      </div>
       </div>
     </section>
   </main>

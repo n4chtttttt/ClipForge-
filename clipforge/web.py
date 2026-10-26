@@ -38,6 +38,8 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
     upload_dir = data_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     template_dir = Path(__file__).parent / "web_static"
+    with JobStore(data_dir / "clipforge.db") as jobs:
+        jobs.fail_interrupted()
     transcriber_factory = transcriber_factory or (lambda opts: WhisperTranscriber(
         opts["model"], opts["device"], "int8"))
 
@@ -92,6 +94,24 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
                 return self._start_job()
             return self._json({"error": "Not found"}, 404)
 
+        def do_DELETE(self):
+            path = urllib.parse.urlsplit(self.path).path
+            match = re.fullmatch(r"/api/jobs/([a-f0-9]{8})", path)
+            if not match:
+                return self._json({"error": "Not found"}, 404)
+            job_id = match.group(1)
+            with JobStore(data_dir / "clipforge.db") as jobs:
+                job = jobs.get(job_id)
+                if job is None:
+                    return self._json({"error": "Job not found"}, 404)
+                if job["status"] in ("queued", "running"):
+                    return self._json({"error": "Wait for this job to finish before deleting it."}, 409)
+                jobs.delete(job_id)
+            folder = (data_dir / "jobs" / job_id).resolve()
+            if folder.is_dir() and folder.is_relative_to((data_dir / "jobs").resolve()):
+                shutil.rmtree(folder, ignore_errors=True)
+            return self._json({"deleted": job_id})
+        
         def _upload(self):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
