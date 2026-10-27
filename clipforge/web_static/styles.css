@@ -237,6 +237,114 @@ button {
   margin-top: 8px;
 }
 
+.link-source {
+  margin-top: 16px;
+}
+
+.link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.link-input {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid #363d3a;
+  background: #202323;
+  color: var(--text);
+  padding: 0 8px;
+  font: 10px var(--mono);
+}
+
+.link-input::placeholder {
+  color: #737c76;
+}
+
+.link-button {
+  border: 1px solid #596448;
+  background: #20251a;
+  color: var(--accent);
+  padding: 0 10px;
+  font: 10px var(--mono);
+}
+
+.link-button:hover:not(:disabled) {
+  background: #2a321e;
+}
+
+.link-button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.link-note {
+  color: #737b76;
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 7px 0 0;
+}
+
+.link-progress {
+  margin-top: 11px;
+}
+
+.link-progress-copy {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: #aeb6af;
+  font: 10px var(--mono);
+}
+
+.link-progress-copy strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.link-progress-track {
+  height: 4px;
+  margin-top: 7px;
+  overflow: hidden;
+  background: #343a36;
+}
+
+.link-progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  transition: width .2s ease;
+}
+
+.link-progress-track.indeterminate span {
+  width: 36%;
+  animation: link-download-indeterminate 1.2s ease-in-out infinite alternate;
+}
+
+.link-progress-detail {
+  color: #737b76;
+  font-size: 10px;
+  margin: 5px 0 0;
+}
+
+@keyframes link-download-indeterminate {
+  from { transform: translateX(-8%); }
+  to { transform: translateX(190%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-progress-track span {
+    transition: none;
+  }
+
+  .link-progress-track.indeterminate span {
+    animation: none;
+    width: 36%;
+  }
+}
+
 .text-link {
   color: var(--accent);
 }
@@ -634,6 +742,29 @@ button {
   color: var(--accent);
   font: 10px var(--mono);
   padding: 2px;
+}
+
+.job-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cancel-job-button {
+  border: 1px solid #76473f;
+  background: #2a1e1c;
+  color: #ffc0b3;
+  padding: 4px 8px;
+  font: 10px var(--mono);
+}
+
+.cancel-job-button:hover:not(:disabled) {
+  background: #39231f;
+}
+
+.cancel-job-button:disabled {
+  opacity: .7;
+  cursor: wait;
 }
 
 .progress-panel pre {

@@ -1,3 +1,4 @@
 # Core MVP dependencies (all free). FFmpeg must be installed separately.
 faster-whisper>=1.1.0
 av<19
+yt-dlp[default]>=2025.11.12

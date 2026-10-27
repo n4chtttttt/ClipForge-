@@ -13,6 +13,10 @@ from .providers.base import MomentScorer, Transcriber
 from .render import render_short
 
 
+class JobCancelled(Exception):
+    """Raised when a user requests that an active job stop."""
+
+
 def run_pipeline(
     source: Path,
     settings: Settings,
@@ -23,21 +27,29 @@ def run_pipeline(
     renderer: Callable = render_short,
     log: Callable[[str], None] = print,
     job_id: str | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict:
     jobs = JobStore(settings.db_path)
     job_id = job_id or jobs.create(str(source))
     job_dir = settings.jobs_dir / job_id
+
+    def check_cancelled() -> None:
+        if cancel_check is not None and cancel_check():
+            raise JobCancelled("Cancelled by user.")
+
     def emit(message: str, *, stage: str | None = None, progress: int | None = None) -> None:
         log(message)
         jobs.update(job_id, stage=stage, progress=progress, message=message)
     try:
         jobs.start(job_id)
+        check_cancelled()
         job_dir.mkdir(parents=True, exist_ok=True)
         emit(f"[1/3] Transcribing {source.name} ...", stage="Transcribing", progress=5)
         started = time.time()
         last = {"pct": -1}
 
         def on_transcribe_progress(fraction: float) -> None:
+            check_cancelled()
             pct = int(fraction * 100)
             if pct == last["pct"]:
                 return
@@ -49,8 +61,10 @@ def run_pipeline(
             segments = transcriber.transcribe(source, on_progress=on_transcribe_progress)
         else:
             segments = transcriber.transcribe(source)
+        check_cancelled()
         (job_dir / "transcript.json").write_text(json.dumps(segments_to_dict(segments)), encoding="utf-8")
 
+        check_cancelled()
         emit("[2/3] Finding engaging moments ...", stage="Finding moments", progress=45)
         scorer_options = {
             "min_seconds": settings.min_clip_seconds,
@@ -60,22 +74,33 @@ def run_pipeline(
         if "source" in inspect.signature(scorer.find_moments).parameters:
             scorer_options["source"] = source
         moments = scorer.find_moments(segments, **scorer_options)
+        check_cancelled()
         for i, m in enumerate(moments, 1):
+            check_cancelled()
             emit(f"   #{i} {m.start:6.1f}-{m.end:6.1f}s  score {m.score:4.1f}  ({m.reason})")
 
         clips: list[str] = []
         if render:
             emit("[3/3] Rendering Shorts ...", stage="Rendering clips", progress=55)
             for i, m in enumerate(moments, 1):
+                check_cancelled()
                 out = job_dir / f"clip_{i:02d}.mp4"
                 renderer(source, m, segments, out, use_nvenc=settings.use_nvenc)
+                check_cancelled()
                 clips.append(str(out))
                 emit(f"   wrote {out}", progress=55 + int(40 * i / max(1, len(moments))))
 
+        check_cancelled()
         result = {"job_id": job_id, "moments": [asdict(m) for m in moments], "clips": clips}
         (job_dir / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        check_cancelled()
         jobs.finish(job_id, result)
         return result
+    except JobCancelled:
+        for partial in job_dir.glob("clip_*.mp4"):
+            partial.unlink(missing_ok=True)
+        jobs.cancel(job_id)
+        raise
     except Exception as exc:
         jobs.fail(job_id, repr(exc))
         raise

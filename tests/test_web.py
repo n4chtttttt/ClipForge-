@@ -88,6 +88,168 @@ class WebTests(unittest.TestCase):
         with urlopen(self.base + clip_path + "?download=1") as download:
             self.assertIn("attachment", download.headers["Content-Disposition"])
 
+    def test_running_job_can_be_cancelled_during_transcription(self):
+        transcribing = threading.Event()
+        stop_if_test_fails = threading.Event()
+
+        def slow_transcribe(_self, path, on_progress=None):
+            transcribing.set()
+            while not stop_if_test_fails.is_set():
+                if on_progress:
+                    on_progress(0.2)
+                time.sleep(0.01)
+            return sample_segments()
+
+        upload = urlopen(Request(
+            self.base + "/api/upload", data=b"source-video", method="POST",
+            headers={"Content-Type": "application/octet-stream", "X-File-Name": "long-video.mp4"},
+        ))
+        uploaded = json.loads(upload.read())
+        payload = json.dumps({"upload_id": uploaded["upload_id"], "options": {
+            "top_n": 1, "min_clip_seconds": 20,
+            "whisper_model": "tiny", "whisper_device": "cpu",
+        }}).encode()
+
+        try:
+            with patch("clipforge.web.ffmpeg_ok", return_value=True), patch.object(
+                FakeTranscriber, "transcribe", slow_transcribe
+            ):
+                response = urlopen(Request(
+                    self.base + "/api/jobs", data=payload, method="POST",
+                    headers={"Content-Type": "application/json"},
+                ))
+                job_id = json.loads(response.read())["job_id"]
+                self.assertTrue(transcribing.wait(timeout=2))
+
+                cancelled = urlopen(Request(
+                    self.base + f"/api/jobs/{job_id}/cancel", method="POST",
+                ))
+                self.assertEqual(cancelled.status, 202)
+                self.assertEqual(json.loads(cancelled.read())["status"], "cancelling")
+
+                deadline = time.time() + 3
+                job = None
+                while time.time() < deadline:
+                    job = json.loads(urlopen(self.base + f"/api/jobs/{job_id}").read())["job"]
+                    if job["status"] in {"cancelled", "done", "failed"}:
+                        break
+                    time.sleep(0.02)
+
+                self.assertEqual(job["status"], "cancelled", job)
+                self.assertEqual(job["stage"], "Cancelled")
+                self.assertIsNone(job["result"])
+        finally:
+            stop_if_test_fails.set()
+
+    def test_youtube_link_progress_tracks_reported_bytes_and_imports_as_a_video_job(self):
+        progress_ready = threading.Event()
+        report_exact_total = threading.Event()
+        exact_progress_ready = threading.Event()
+        finish_download = threading.Event()
+
+        def fake_download(url, upload_dir, upload_id, progress_hook=None):
+            if progress_hook:
+                progress_hook({
+                    "status": "downloading",
+                    "downloaded_bytes": 1_000_000,
+                    "total_bytes": None,
+                    "total_bytes_estimate": None,
+                })
+                progress_ready.set()
+                report_exact_total.wait(timeout=3)
+                progress_hook({
+                    "status": "downloading",
+                    "downloaded_bytes": 4_000_000,
+                    "total_bytes": 8_000_000,
+                    "total_bytes_estimate": None,
+                })
+                exact_progress_ready.set()
+                finish_download.wait(timeout=3)
+            source = upload_dir / f"{upload_id}_ishowspeed.mp4"
+            source.write_bytes(b"downloaded-youtube-video")
+            return source
+
+        body = json.dumps({"url": "https://www.youtube.com/watch?v=example123"}).encode()
+        try:
+            with patch("clipforge.web._download_youtube_video", side_effect=fake_download) as downloader:
+                response = urlopen(Request(
+                    self.base + "/api/link", data=body, method="POST",
+                    headers={"Content-Type": "application/json"},
+                ))
+                started = json.loads(response.read())
+
+                self.assertEqual(response.status, 202)
+                self.assertTrue(progress_ready.wait(timeout=2))
+                progress_url = self.base + f"/api/link/{started['upload_id']}"
+                progress = json.loads(urlopen(progress_url).read())
+                self.assertEqual(progress["status"], "downloading")
+                self.assertIsNone(progress["progress"])
+                self.assertEqual(progress["downloaded_bytes"], 1_000_000)
+
+                report_exact_total.set()
+                self.assertTrue(exact_progress_ready.wait(timeout=2))
+                progress = json.loads(urlopen(progress_url).read())
+                self.assertEqual(progress["progress"], 50)
+                self.assertFalse(progress["progress_estimated"])
+                self.assertEqual(progress["total_bytes"], 8_000_000)
+
+                finish_download.set()
+                deadline = time.time() + 3
+                imported = None
+                while time.time() < deadline:
+                    imported = json.loads(urlopen(progress_url).read())
+                    if imported["status"] in {"done", "failed"}:
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(imported["status"], "done", imported)
+                self.assertEqual(imported["progress"], 100)
+                self.assertEqual(imported["filename"], "ishowspeed.mp4")
+                self.assertEqual(imported["bytes"], len(b"downloaded-youtube-video"))
+                downloader.assert_called_once()
+                self.assertEqual(downloader.call_args.args[0], "https://www.youtube.com/watch?v=example123")
+        finally:
+            report_exact_total.set()
+            finish_download.set()
+
+        payload = json.dumps({"upload_id": imported["upload_id"], "options": {
+            "top_n": 1, "min_clip_seconds": 20,
+            "whisper_model": "tiny", "whisper_device": "cpu",
+        }}).encode()
+        with patch("clipforge.web.ffmpeg_ok", return_value=True):
+            response = urlopen(Request(
+                self.base + "/api/jobs", data=payload, method="POST",
+                headers={"Content-Type": "application/json"},
+            ))
+            job_id = json.loads(response.read())["job_id"]
+
+        deadline = time.time() + 5
+        job = None
+        while time.time() < deadline:
+            job = json.loads(urlopen(self.base + f"/api/jobs/{job_id}").read())["job"]
+            if job["status"] in ("done", "failed"):
+                break
+            time.sleep(0.03)
+        self.assertEqual(job["status"], "done", job)
+        self.assertTrue(Path(job["result"]["clips"][0]).is_file())
+
+    def test_youtube_link_rejects_non_youtube_urls(self):
+        urls = (
+            "http://www.youtube.com/watch?v=example123",
+            "https://example.com/video.mp4",
+            "https://www.youtube.com.evil.test/watch?v=example123",
+        )
+        with patch("clipforge.web._download_youtube_video") as downloader:
+            for url in urls:
+                with self.subTest(url=url):
+                    body = json.dumps({"url": url}).encode()
+                    with self.assertRaises(HTTPError) as error:
+                        urlopen(Request(
+                            self.base + "/api/link", data=body, method="POST",
+                            headers={"Content-Type": "application/json"},
+                        ))
+                    self.assertEqual(error.exception.code, 400)
+        downloader.assert_not_called()
+
     def test_upload_rejects_unsupported_and_job_rejects_untrusted_path(self):
         with self.assertRaises(HTTPError) as error:
             urlopen(Request(self.base + "/api/upload", data=b"data", method="POST",

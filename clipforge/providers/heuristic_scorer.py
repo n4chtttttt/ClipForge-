@@ -20,11 +20,20 @@ HOOK_WORDS = {
 FILLERS = {"um", "uh", "like", "basically", "literally", "yeah", "okay"}
 DANGLING_WORDS = {
     # English
-    "and", "but", "so", "because", "the", "to", "with", "for", "of", "in", "on",
+    "and", "but", "or", "so", "because", "although", "though", "if", "when", "while",
+    "unless", "the", "a", "an", "to", "with", "for", "of", "in", "on", "at", "by", "from",
+    "which", "who",
     # Tagalog / Filipino
-    "at", "pero", "kasi", "dahil", "kaya", "ang", "ng", "sa", "yung", "tapos", "para",
+    "at", "pero", "kasi", "dahil", "kaya", "kung", "kapag", "ang", "ng", "sa", "yung", "tapos", "para",
 }
 LEADING_FILLERS = {"um", "uh", "erm", "hmm", "ah", "eh"}
+# Short reactions and connective words often signal that a complete sentence
+# is still part of a larger thought or payoff.
+END_CONTINUATION_STARTERS = {
+    "and", "but", "so", "because", "then", "also", "though", "although",
+    "wow", "yeah", "yes", "no", "oh", "ah", "exactly", "everything",
+    "this", "that", "we", "they", "it", "he", "she", "i", "i'm", "im",
+}
 
 
 @dataclass(frozen=True)
@@ -127,22 +136,41 @@ class HeuristicScorer:
         return bool(re.search(r"[.!?…][\"')\]]*$", token.text.strip()))
 
     @staticmethod
-    def _boundary_reason(token: _TimedToken, pause: float, threshold: float) -> tuple[float, str]:
+    def _continues_immediately(
+        token: _TimedToken, next_token: _TimedToken | None
+    ) -> bool:
+        if next_token is None or not HeuristicScorer._is_sentence_end(token):
+            return False
+        gap = max(0.0, next_token.start - token.end)
+        return gap <= 1.5 and next_token.normalized in END_CONTINUATION_STARTERS
+
+    @staticmethod
+    def _boundary_reason(
+        token: _TimedToken,
+        pause: float,
+        threshold: float,
+        next_token: _TimedToken | None = None,
+    ) -> tuple[float, str]:
         score = 0.0
         reasons: list[str] = []
-        if HeuristicScorer._is_sentence_end(token):
-            score += 1.5
-            reasons.append("sentence ending")
+        sentence_end = HeuristicScorer._is_sentence_end(token)
+        if sentence_end:
+            score += 3.0
+            reasons.append("complete sentence")
         if pause >= threshold:
-            score += min(2.5, 1.0 + (pause - threshold) * 1.5)
+            score += min(1.5, 0.8 + (pause - threshold))
             reasons.append(f"{pause:.1f}s pause")
-        elif not HeuristicScorer._is_sentence_end(token):
-            score -= 1.5
-            reasons.append("no pause or sentence ending")
+        elif not sentence_end:
+            score -= 3.0
+            reasons.append("cuts mid-sentence")
 
         if token.normalized in DANGLING_WORDS:
-            score -= 3.0
+            score -= 4.0
             reasons.append("ends on a dangling word")
+
+        if HeuristicScorer._continues_immediately(token, next_token):
+            score -= 4.5
+            reasons.append("speech continues immediately")
 
         return score, ", ".join(reasons) or "natural speech boundary"
 
@@ -187,6 +215,7 @@ class HeuristicScorer:
             start = start_token.start
             first_word = start_token.normalized
             start_score = -1.5 if first_word in LEADING_FILLERS else 0.0
+            start_candidates: list[tuple[Moment, bool, bool]] = []
 
             for end_index in range(start_index, len(tokens)):
                 end_token = tokens[end_index]
@@ -202,8 +231,10 @@ class HeuristicScorer:
                 if content_reason == "too little speech":
                     continue
 
+                next_token = tokens[end_index + 1] if end_index + 1 < len(tokens) else None
+                continues_immediately = self._continues_immediately(end_token, next_token)
                 boundary_score, boundary_reason = self._boundary_reason(
-                    end_token, pauses[end_index], pause_threshold
+                    end_token, pauses[end_index], pause_threshold, next_token
                 )
                 # A modest preference for concise clips avoids always stretching
                 # candidates to the hard cap while leaving room for a good payoff.
@@ -216,9 +247,26 @@ class HeuristicScorer:
                 reason = f"{content_reason}; cut: {boundary_reason}"
                 if start_score < 0:
                     reason += "; starts with a filler"
-                candidates.append(
-                    Moment(max(0.0, start - 0.08), end + 0.4, score, reason, title)
+                moment = Moment(max(0.0, start - 0.08), end + 0.4, score, reason, title)
+                natural_ending = (
+                    self._is_sentence_end(end_token) or pauses[end_index] >= pause_threshold
                 )
+                start_candidates.append((moment, natural_ending, continues_immediately))
+
+            # Prefer a complete sentence or a natural pause that is not followed
+            # immediately by another part of the same thought or reaction.
+            clean_natural = [
+                moment
+                for moment, natural, continues in start_candidates
+                if natural and not continues
+            ]
+            natural_candidates = clean_natural or [
+                moment for moment, natural, _ in start_candidates if natural
+            ]
+            if natural_candidates:
+                candidates.extend(natural_candidates)
+            elif start_candidates:
+                candidates.append(max(start_candidates, key=lambda item: item[0].score)[0])
 
         candidates.sort(key=lambda m: m.score, reverse=True)
         chosen: list[Moment] = []

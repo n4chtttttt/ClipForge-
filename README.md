@@ -6,7 +6,7 @@ A local-first Python application for finding potential YouTube Shorts moments in
 
 ## Features
 
-- Local web interface for selecting and uploading videos.
+- Local web interface for selecting and uploading videos or importing a public single-video YouTube link.
 - Adjustable minimum clip duration with an automatically calculated maximum.
 - Configurable number of candidate clips.
 - Speech transcription using Faster-Whisper, with automatic, English, Tagalog, and mixed-language modes.
@@ -50,7 +50,8 @@ The model scores transcripts in their original language, but Tagalog and Taglish
 - Windows 10 or 11
 - Python 3.12
 - FFmpeg
-- Internet access for downloading Python packages and Whisper models when needed
+- Deno 2.3 or later for YouTube links (local file uploads do not need Deno)
+- Internet access for downloading Python packages, Whisper models, and linked videos
 
 ## Installation on Windows
 
@@ -81,6 +82,14 @@ ffmpeg -version
 ```
 
 If the command is not recognized, check that FFmpeg is installed and included in your system PATH.
+
+To import YouTube links, install Deno for yt-dlp's YouTube player challenge support:
+
+```powershell
+winget install DenoLand.Deno
+```
+
+Restart PowerShell after installing it. Local video uploads do not require Deno.
 
 ### 3. Clone the repository
 
@@ -128,7 +137,7 @@ With the virtual environment activated, run:
 python -m unittest discover -s tests -v
 ```
 
-The current test suite covers the pipeline, clip-caption timing, database cleanup, upload validation, job processing, and media-serving behavior. Passing tests do not guarantee successful transcription or rendering on every computer.
+The current test suite covers the pipeline, clip-caption timing, database cleanup, upload and YouTube-link validation, job processing, and media-serving behavior. Passing tests do not guarantee successful transcription or rendering on every computer.
 
 ## Local files
 

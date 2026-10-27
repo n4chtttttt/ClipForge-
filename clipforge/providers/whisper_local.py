@@ -24,7 +24,7 @@ class WhisperTranscriber:
         options = {
             "word_timestamps": True,
             "vad_filter": True,
-            "beam_size": 1,
+            "beam_size": 5,  # Wider search improves recognition at some extra processing time.
             "condition_on_previous_text": False,
         }
         if self.language in {"en", "tl"}:
@@ -32,6 +32,10 @@ class WhisperTranscriber:
         elif self.language == "mixed":
             # Requires faster-whisper 1.1+; detect language while decoding segments.
             options["multilingual"] = True
+
+        if self.language in {"auto", "en", "mixed"}:
+            # Phrase hints help Whisper resolve this common phonetic confusion.
+            options["hotwords"] = "merry-go-round"
         raw_segments, info = model.transcribe(str(media_path), **options)
         total = max(float(getattr(info, "duration", 0) or 0), 1.0)
         out: list[Segment] = []

@@ -1,4 +1,4 @@
-"""Local-first ClipForge web interface. No external services or runtime assets."""
+"""Local-first ClipForge interface for local files and public YouTube video links."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +15,7 @@ from pathlib import Path, PureWindowsPath
 
 from .config import Settings
 from .jobs import JobStore
-from .pipeline import run_pipeline
+from .pipeline import JobCancelled, run_pipeline
 from .providers.heuristic_scorer import HeuristicScorer
 from .providers.ollama_scorer import OllamaScorer
 from .providers.whisper_local import WhisperTranscriber
@@ -33,12 +34,96 @@ def _safe_name(raw: str) -> str:
     return name[:120] or "source-video.mp4"
 
 
+YOUTUBE_HOSTS = {
+    "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
+    "youtu.be", "youtube-nocookie.com", "www.youtube-nocookie.com",
+}
+
+
+def _validate_youtube_url(raw: object) -> str:
+    if not isinstance(raw, str):
+        raise ValueError("Paste a YouTube video link.")
+    url = raw.strip()
+    if not url or len(url) > 2048 or any(ord(char) < 33 for char in url):
+        raise ValueError("Paste a valid YouTube video link.")
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("That YouTube link is not valid.") from exc
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (parsed.scheme.lower() != "https" or host not in YOUTUBE_HOSTS
+            or parsed.username is not None or parsed.password is not None
+            or port not in (None, 443) or parsed.path in ("", "/")):
+        raise ValueError("Use an HTTPS link to a single YouTube video.")
+    return url
+
+
+def _download_youtube_video(url: str, upload_dir: Path, upload_id: str, progress_hook=None) -> Path:
+    from yt_dlp import YoutubeDL
+
+    def reject_unsupported(info: dict, *, incomplete: bool):
+        if info.get("_type") in {"playlist", "multi_video"}:
+            return "Paste a link to one YouTube video, not a playlist."
+        if info.get("live_status") in {"is_live", "is_upcoming"}:
+            return "Live and upcoming YouTube videos are not supported."
+        return None
+
+    options = {
+        "format": "best[ext=mp4][height<=1080]/best[height<=1080]/best",
+        "outtmpl": str(upload_dir / f"{upload_id}_%(id)s.%(ext)s"),
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+        "match_filter": reject_unsupported,
+    }
+    if progress_hook is not None:
+        options["progress_hooks"] = [progress_hook]
+    try:
+        with YoutubeDL(options) as downloader:
+            info = downloader.extract_info(url, download=True)
+        if not isinstance(info, dict) or info.get("_type") in {"playlist", "multi_video"}:
+            raise ValueError("Paste a link to one YouTube video, not a playlist.")
+        downloaded = [
+            item for item in upload_dir.glob(f"{upload_id}_*")
+            if item.is_file() and item.suffix.lower() in VIDEO_TYPES
+        ]
+        if not downloaded:
+            raise RuntimeError("YouTube did not provide a downloadable video file.")
+        source = max(downloaded, key=lambda item: item.stat().st_size)
+        title = _safe_name(str(info.get("title") or "youtube-video"))
+        stem = Path(title).stem or "youtube-video"
+        destination = upload_dir / f"{upload_id}_{stem[:96]}{source.suffix.lower()}"
+        if source != destination:
+            source.replace(destination)
+        return destination
+    except Exception:
+        for item in upload_dir.glob(f"{upload_id}_*"):
+            if item.is_file():
+                item.unlink(missing_ok=True)
+        raise
+
+
 def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_factory=None,
                   scorer_factory=None, renderer=None) -> ThreadingHTTPServer:
     data_dir = data_dir.resolve()
     upload_dir = data_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     template_dir = Path(__file__).parent / "web_static"
+    link_downloads: dict[str, dict] = {}
+    link_downloads_lock = threading.Lock()
+    job_cancel_events: dict[str, threading.Event] = {}
+    job_cancel_lock = threading.Lock()
+
+    def update_link_download(upload_id: str, **updates) -> None:
+        with link_downloads_lock:
+            state = link_downloads.get(upload_id)
+            if state is not None:
+                state.update(updates)
+                state["_updated_at"] = time.monotonic()
+
     with JobStore(data_dir / "clipforge.db") as jobs:
         jobs.fail_interrupted()
     transcriber_factory = transcriber_factory or (lambda opts: WhisperTranscriber(
@@ -74,6 +159,17 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
             if path == "/api/jobs":
                 with JobStore(data_dir / "clipforge.db") as jobs:
                     return self._json({"jobs": jobs.list()})
+            match = re.fullmatch(r"/api/link/([a-f0-9]{32})", path)
+            if match:
+                with link_downloads_lock:
+                    current = link_downloads.get(match.group(1))
+                    progress = (
+                        {key: value for key, value in current.items() if key != "_updated_at"}
+                        if current is not None else None
+                    )
+                if progress is None:
+                    return self._json({"error": "YouTube download not found."}, 404)
+                return self._json(progress)
             match = re.fullmatch(r"/api/jobs/([a-f0-9]{8})", path)
             if match:
                 with JobStore(data_dir / "clipforge.db") as jobs:
@@ -91,8 +187,13 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
             path = urllib.parse.urlsplit(self.path).path
             if path == "/api/upload":
                 return self._upload()
+            if path == "/api/link":
+                return self._link_source()
             if path == "/api/jobs":
                 return self._start_job()
+            match = re.fullmatch(r"/api/jobs/([a-f0-9]{8})/cancel", path)
+            if match:
+                return self._cancel_job(match.group(1))
             match = re.fullmatch(r"/api/jobs/([a-f0-9]{8})/feedback", path)
             if match:
                 return self._save_feedback(match.group(1))
@@ -142,6 +243,141 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
                 destination.unlink(missing_ok=True)
                 return self._json({"error": "The upload did not finish. Try again."}, 400)
             return self._json({"upload_id": upload_id, "filename": name, "bytes": length}, 201)
+
+        def _link_source(self):
+            try:
+                body = self._body_json()
+                if not isinstance(body, dict):
+                    raise ValueError("Paste a YouTube video link.")
+                url = _validate_youtube_url(body.get("url"))
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                return self._json({"error": str(exc)}, 400)
+
+            upload_id = uuid.uuid4().hex
+            now = time.monotonic()
+            with link_downloads_lock:
+                for old_id, old_state in list(link_downloads.items()):
+                    if (old_state.get("status") in {"done", "failed"}
+                            and now - old_state.get("_updated_at", now) > 3600):
+                        del link_downloads[old_id]
+                link_downloads[upload_id] = {
+                    "upload_id": upload_id,
+                    "status": "downloading",
+                    "stage": "Preparing YouTube download",
+                    "progress": None,
+                    "progress_estimated": False,
+                    "downloaded_bytes": 0,
+                    "total_bytes": None,
+                    "estimated_total_bytes": None,
+                    "_updated_at": now,
+                }
+
+            def receive_progress(event: dict) -> None:
+                status = event.get("status")
+                if status not in {"downloading", "finished"}:
+                    return
+
+                def byte_count(value):
+                    try:
+                        return max(0, int(value)) if value is not None else None
+                    except (TypeError, ValueError, OverflowError):
+                        return None
+
+                downloaded = byte_count(event.get("downloaded_bytes")) or 0
+                total = byte_count(event.get("total_bytes"))
+                estimated_total = byte_count(event.get("total_bytes_estimate"))
+                denominator = total or estimated_total
+                progress = (
+                    min(99, max(0, int(downloaded * 100 / denominator)))
+                    if denominator else None
+                )
+                info = event.get("info_dict") or {}
+                requested_formats = info.get("requested_formats") or []
+                stage = "Downloading from YouTube"
+                if isinstance(requested_formats, (list, tuple)) and len(requested_formats) > 1:
+                    format_id = info.get("format_id")
+                    part = next(
+                        (index for index, item in enumerate(requested_formats, 1)
+                         if isinstance(item, dict) and item.get("format_id") == format_id),
+                        None,
+                    )
+                    if part is not None:
+                        stage = f"Downloading video part {part} of {len(requested_formats)}"
+                if status == "finished":
+                    stage = "Finishing video file"
+                    if progress is not None:
+                        progress = min(99, progress)
+
+                update_link_download(
+                    upload_id,
+                    stage=stage,
+                    progress=progress,
+                    progress_estimated=total is None and estimated_total is not None,
+                    downloaded_bytes=downloaded,
+                    total_bytes=total,
+                    estimated_total_bytes=estimated_total,
+                )
+
+            def download_in_background() -> None:
+                try:
+                    source = _download_youtube_video(
+                        url, upload_dir, upload_id, progress_hook=receive_progress
+                    )
+                    if (not source.is_file()
+                            or not source.resolve().is_relative_to(upload_dir.resolve())
+                            or source.suffix.lower() not in VIDEO_TYPES):
+                        raise RuntimeError("The downloaded file is not a supported video.")
+                    size = source.stat().st_size
+                    update_link_download(
+                        upload_id,
+                        status="done",
+                        stage="Download complete",
+                        progress=100,
+                        progress_estimated=False,
+                        downloaded_bytes=size,
+                        total_bytes=size,
+                        estimated_total_bytes=None,
+                        filename=source.name[len(upload_id) + 1:],
+                        bytes=size,
+                    )
+                except ModuleNotFoundError:
+                    update_link_download(
+                        upload_id,
+                        status="failed",
+                        stage="Download failed",
+                        error="YouTube link support is not installed. Install the project requirements and restart ClipForge.",
+                    )
+                except Exception as exc:
+                    message = " ".join(str(exc).split())[:240]
+                    detail = f" {message}" if message else ""
+                    update_link_download(
+                        upload_id,
+                        status="failed",
+                        stage="Download failed",
+                        error=f"Could not download that YouTube video.{detail}",
+                    )
+
+            threading.Thread(
+                target=download_in_background,
+                name=f"youtube-download-{upload_id[:8]}",
+                daemon=True,
+            ).start()
+            return self._json({"upload_id": upload_id, "status": "downloading"}, 202)
+
+        def _cancel_job(self, job_id: str):
+            with JobStore(data_dir / "clipforge.db") as jobs:
+                job = jobs.get(job_id)
+                if job is None:
+                    return self._json({"error": "Job not found"}, 404)
+                if job["status"] not in {"queued", "running"}:
+                    return self._json({"error": "This job has already finished."}, 409)
+                with job_cancel_lock:
+                    event = job_cancel_events.get(job_id)
+                    if event is None or not jobs.request_cancel(job_id):
+                        return self._json({"error": "This job has already finished."}, 409)
+                    event.set()
+                    jobs.update(job_id, stage="Cancelling", message="Cancellation requested.")
+            return self._json({"job_id": job_id, "status": "cancelling"}, 202)
 
         def _save_feedback(self, job_id: str):
             try:
@@ -206,6 +442,9 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
                                 whisper_device=device)
             with JobStore(settings.db_path) as jobs:
                 job_id = jobs.create(str(source))
+            cancel_event = threading.Event()
+            with job_cancel_lock:
+                job_cancel_events[job_id] = cancel_event
             self._json({"job_id": job_id}, 202)
 
             def work():
@@ -221,12 +460,18 @@ def create_server(data_dir: Path, *, host="127.0.0.1", port=8765, transcriber_fa
                     run_pipeline(source, settings, transcriber_factory({
                         "model": model, "device": device, "language": language,
                     }), scorer,
-                                 render=True, job_id=job_id,
+                                 render=True, job_id=job_id, cancel_check=cancel_event.is_set,
                                  **({"renderer": renderer} if renderer else {}), log=lambda _message: None)
+                except JobCancelled:
+                    with JobStore(settings.db_path) as jobs:
+                        jobs.cancel(job_id)
                 except Exception as exc:
                     print(f"[job {job_id}] {exc!r}")
                     with JobStore(settings.db_path) as jobs:
                         jobs.fail(job_id, repr(exc))
+                finally:
+                    with job_cancel_lock:
+                        job_cancel_events.pop(job_id, None)
 
             threading.Thread(target=work, name=f"clipforge-{job_id}", daemon=True).start()
 

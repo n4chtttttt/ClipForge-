@@ -30,6 +30,19 @@
         <span id="file-hint">or <span class="text-link">browse files</span></span>
         <span class="file-types">MP4 · MOV · MKV · WEBM</span>
       </label>
+      <div class="link-source">
+        <label class="field-label" for="video-url">OR PASTE A YOUTUBE LINK</label>
+        <div class="link-row">
+          <input id="video-url" class="link-input" type="url" placeholder="https://youtu.be/..." autocomplete="url">
+          <button id="use-link-button" class="link-button" type="button">Use link</button>
+        </div>
+        <p class="link-note">Public single videos only. Longer videos take longer to download.</p>
+        <div id="link-progress" class="link-progress" hidden>
+          <div class="link-progress-copy"><span id="link-progress-stage">Preparing YouTube download</span><strong id="link-progress-percent"></strong></div>
+          <div id="link-progress-track" class="link-progress-track indeterminate" role="progressbar" aria-label="YouTube download progress" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Preparing download"><span id="link-progress-fill"></span></div>
+          <p id="link-progress-detail" class="link-progress-detail">Getting video details…</p>
+        </div>
+      </div>
 
       <div class="option-group">
         <div class="section-label"><span>CLIP LENGTH</span><span id="duration-value">20 sec min · up to 32 sec max</span></div>
@@ -74,7 +87,7 @@
       </div>
 
       <div id="job-view" hidden>
-        <div id="progress-panel" class="progress-panel" hidden><div class="progress-copy"><div><span class="status-dot"></span><strong id="job-stage">Preparing job</strong></div><span id="job-percent">0%</span></div><div class="progress-track"><span id="progress-fill"></span></div><div class="job-foot"><span id="job-source"></span><button id="logs-toggle" class="text-button" aria-expanded="false">Show log</button></div><pre id="job-logs" hidden></pre><div id="job-failure" class="job-failure" hidden></div></div>
+        <div id="progress-panel" class="progress-panel" hidden><div class="progress-copy"><div><span class="status-dot"></span><strong id="job-stage">Preparing job</strong></div><span id="job-percent">0%</span></div><div class="progress-track"><span id="progress-fill"></span></div><div class="job-foot"><span id="job-source"></span><div class="job-actions"><button id="cancel-job-button" class="cancel-job-button" type="button" hidden>Cancel job</button><button id="logs-toggle" class="text-button" aria-expanded="false">Show log</button></div></div><pre id="job-logs" hidden></pre><div id="job-failure" class="job-failure" hidden></div></div>
         <div id="clips-section" hidden>
           <div class="viewer-layout">
             <div class="viewer"><video id="clip-player" controls playsinline preload="metadata"></video><div id="player-empty" class="player-empty" hidden><p>Select a clip to preview</p></div></div>

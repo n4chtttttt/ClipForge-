@@ -75,6 +75,22 @@ class JobStore(AbstractContextManager):
         self.db.execute("UPDATE jobs SET status='failed', stage='Failed', error=? WHERE id=?", (error, job_id))
         self.db.commit()
 
+    def request_cancel(self, job_id: str) -> bool:
+        cursor = self.db.execute(
+            "UPDATE jobs SET stage='Cancelling' WHERE id=? AND status IN ('queued','running')",
+            (job_id,),
+        )
+        self.db.commit()
+        return cursor.rowcount == 1
+
+    def cancel(self, job_id: str) -> None:
+        self.db.execute(
+            "UPDATE jobs SET status='cancelled', stage='Cancelled', error='Cancelled by user.' "
+            "WHERE id=? AND status IN ('queued','running')",
+            (job_id,),
+        )
+        self.db.commit()
+
     def delete(self, job_id: str) -> None:
         self.db.execute("DELETE FROM clip_feedback WHERE job_id=?", (job_id,))
         self.db.execute("DELETE FROM jobs WHERE id=?", (job_id,))

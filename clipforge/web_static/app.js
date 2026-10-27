@@ -43,8 +43,66 @@ async function request(url, options) {
   return data;
 }
 
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return Math.round(bytes) + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = bytes / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+  return size.toFixed(size >= 10 ? 1 : 2) + ' ' + units[unit];
+}
+
+function renderLinkProgress(download) {
+  const panel = $('link-progress');
+  const track = $('link-progress-track');
+  const fill = $('link-progress-fill');
+  const percent = download.progress;
+  panel.hidden = false;
+  $('link-progress-stage').textContent = download.stage || 'Downloading from YouTube';
+  if (Number.isFinite(percent)) {
+    const value = Math.max(0, Math.min(100, percent));
+    const total = download.total_bytes ?? download.estimated_total_bytes;
+    const estimated = Boolean(download.progress_estimated);
+    track.classList.remove('indeterminate');
+    track.setAttribute('aria-valuenow', String(value));
+    track.setAttribute('aria-valuetext', (estimated ? 'About ' : '') + value + '% downloaded');
+    fill.style.width = value + '%';
+    $('link-progress-percent').textContent = (estimated ? '~' : '') + value + '%';
+    const downloaded = formatBytes(download.downloaded_bytes);
+    const totalLabel = formatBytes(total);
+    $('link-progress-detail').textContent = totalLabel
+      ? (downloaded || '0 B') + ' of ' + (estimated ? 'about ' : '') + totalLabel
+      : (downloaded || '0 B') + ' downloaded · total size unavailable';
+  } else {
+    track.classList.add('indeterminate');
+    track.removeAttribute('aria-valuenow');
+    track.setAttribute('aria-valuetext', 'Download in progress; total size unavailable');
+    fill.style.width = '';
+    $('link-progress-percent').textContent = 'In progress';
+    const downloaded = formatBytes(download.downloaded_bytes);
+    $('link-progress-detail').textContent = downloaded
+      ? downloaded + ' downloaded · total size unavailable'
+      : 'Getting video details…';
+  }
+}
+
+async function waitForYoutubeDownload(uploadId) {
+  while (true) {
+    const download = await request('/api/link/' + uploadId);
+    renderLinkProgress(download);
+    if (download.status === 'done') return download;
+    if (download.status === 'failed') {
+      throw new Error(download.error || 'Could not download that YouTube video.');
+    }
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+}
+
 async function uploadFile(file) {
   showError('');
+  $('link-progress').hidden = true;
   if (!file) return;
   const allowed = /\.(mp4|mov|mkv|avi|webm|m4v)$/i.test(file.name);
   if (!allowed) { showError('Use an MP4, MOV, MKV, AVI, WebM, or M4V video.'); return; }
@@ -70,6 +128,46 @@ async function uploadFile(file) {
     showError(error.message);
   } finally {
     state.busy = false;
+  }
+}
+
+async function useYoutubeLink() {
+  const url = $('video-url').value.trim();
+  showError('');
+  $('link-progress').hidden = true;
+  if (!url) { showError('Paste a YouTube video link.'); return; }
+  state.busy = true;
+  state.upload = null;
+  $('start-button').disabled = true;
+  $('use-link-button').disabled = true;
+  $('file-name').textContent = 'Connecting to YouTube…';
+  $('file-hint').textContent = 'Getting video details.';
+  try {
+    const started = await request('/api/link', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url})
+    });
+    renderLinkProgress({
+      status: 'downloading',
+      stage: 'Preparing YouTube download',
+      progress: null,
+      downloaded_bytes: 0
+    });
+    const result = await waitForYoutubeDownload(started.upload_id);
+    state.upload = result;
+    $('file-name').textContent = result.filename;
+    $('file-hint').textContent = (result.bytes / 1024 / 1024).toFixed(1) + ' MB · ready to process';
+  } catch (error) {
+    state.upload = null;
+    $('file-name').textContent = 'Drop a video here';
+    $('file-hint').textContent = 'or browse files';
+    $('link-progress').hidden = true;
+    showError(error.message);
+  } finally {
+    state.busy = false;
+    $('use-link-button').disabled = false;
+    $('start-button').disabled = !state.upload;
   }
 }
 
@@ -256,8 +354,15 @@ function renderSelectedJob() {
     $('job-stage').textContent = job.stage || (job.status === 'queued' ? 'Queued' : 'Working');
     $('job-percent').textContent = `${job.progress || 0}%`;
     $('progress-fill').style.width = `${Math.min(100, job.progress || 0)}%`;
-    $('job-failure').hidden = job.status !== 'failed';
-    $('job-failure').textContent = job.status === 'failed' ? (job.error || 'The job failed. Check the log for details.') : '';
+    const cancelButton = $('cancel-job-button');
+    const active = ['queued', 'running'].includes(job.status);
+    cancelButton.hidden = !active;
+    cancelButton.disabled = job.stage === 'Cancelling';
+    cancelButton.textContent = cancelButton.disabled ? 'Cancelling…' : 'Cancel job';
+    $('job-failure').hidden = !['failed', 'cancelled'].includes(job.status);
+    $('job-failure').textContent = job.status === 'cancelled'
+      ? 'Cancelled. You can change the options or choose another video and start again.'
+      : (job.status === 'failed' ? (job.error || 'The job failed. Check the log for details.') : '');
     renderLog(job);
   }
   renderClips(job);
@@ -289,6 +394,22 @@ async function selectJob(id) {
   renderSelectedJob();
 }
 
+async function cancelJob() {
+  const job = state.jobs.find(item => item.id === state.selectedJob);
+  if (!job || !['queued', 'running'].includes(job.status)) return;
+  const button = $('cancel-job-button');
+  button.disabled = true;
+  button.textContent = 'Cancelling…';
+  try {
+    await request('/api/jobs/' + job.id + '/cancel', {method: 'POST'});
+    await loadJobs();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = 'Cancel job';
+    showError(error.message);
+  }
+}
+
 async function startJob() {
   if (!state.upload || state.busy) return;
   showError('');
@@ -310,7 +431,12 @@ async function startJob() {
 }
 
 $('video-file').addEventListener('change', event => uploadFile(event.target.files[0]));
+$('use-link-button').addEventListener('click', useYoutubeLink);
+$('video-url').addEventListener('keydown', event => {
+  if (event.key === 'Enter') useYoutubeLink();
+});
 $('start-button').addEventListener('click', startJob);
+$('cancel-job-button').addEventListener('click', cancelJob);
 $('feedback-keep').addEventListener('click', () => saveFeedback('keep'));
 $('feedback-reject').addEventListener('click', () => saveFeedback('reject'));
 $('refresh-button').addEventListener('click', loadJobs);
